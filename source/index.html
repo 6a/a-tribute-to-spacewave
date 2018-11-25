@@ -1,0 +1,981 @@
+﻿<!DOCTYPE html>
+<html>
+
+<head>
+    <title>A Tribute to SPACEWAVE</title>
+    <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+
+    <!-- JQUERY -->
+    <script type="text/javascript" src="https://ajax.googleapis.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
+    <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/three.js/90/three.min.js"></script>
+
+    <!-- postprocessing -->
+    <script type="text/javascript" src="./js/3shaders/FXAAShader.js"></script>
+    <script type="text/javascript" src="./js/3shaders/CopyShader.js"></script>
+    <script type="text/javascript" src="./js/3shaders/ConvolutionShader.js"></script>
+    <script type="text/javascript" src="./js/3shaders/LuminosityHighPassShader.js"></script>
+    <script type="text/javascript" src="./js/3shaders/FilmShader.js"></script>
+
+    <script type="text/javascript" src="./js/pp/EffectComposer.js"></script>
+    <script type="text/javascript" src="./js/pp/ShaderPass.js"></script>
+    <script type="text/javascript" src="./js/pp/RenderPass.js"></script>
+    <script type="text/javascript" src="./js/pp/MaskPass.js"></script>
+    <script type="text/javascript" src="./js/pp/UnrealBloomPass.js"></script>
+    <script type="text/javascript" src="./js/pp/SSAARenderPass.js"></script>
+    <script type="text/javascript" src="./js/pp/TAARenderPass.js"></script>
+    <script type="text/javascript" src="./js/pp/FilmPass.js"></script>
+
+    <!-- My Lib headers -->
+    <script type="text/javascript" src="./js/wrappers/JLib.js"></script>
+
+    <!-- Shader imports -->
+    <script type="text/javascript" src="./shaders/shader_terrain.js"></script>
+    <script type="text/javascript" src="./shaders/shader_jwater.js"></script>
+    <script type="text/javascript" src="./shaders/shader_particle_basic.js"></script>
+    <script type="text/javascript" src="./shaders/shader_retro.js"></script>
+
+    <script type="text/javascript" src="./js/wrappers/JLights.js"></script>
+    <script type="text/javascript" src="./js/loaders/OBJLoader.js"></script>
+    <script type="text/javascript" src="./js/controls/JCamera.js"></script>
+    <script type="text/javascript" src="./js/wrappers/JMaterials.js"></script>
+    <script type="text/javascript" src="./js/wrappers/JTime.js"></script>
+    <script type="text/javascript" src="./js/wrappers/JRetroPass.js"></script>
+    <script type="text/javascript" src="./js/Reflector.js"></script>
+
+    <!-- HTML -->
+    <link rel="stylesheet" type="text/css" href="./css/hero.css">
+</head>
+
+<body>
+    <div id="div3D">
+        <div class="noselect" id="instructions">
+            <p>Left click to interact</p>
+            <p>w, s, a, d = move, q = down, e = up, mouse = look around</p>
+            <p>Press 1 to toggle the pixelizer + colour indexer post-processing pass</p>
+        </div>
+    </div>
+
+    <div id="loading-overlay" class="noselect">
+        <div class="loading-box">
+            <p>A Tribute to SPACEWAVE</p>
+            <p>LOADING - PLEASE WAIT <span id="loading-spinner">\\</span> [<span id="loading-text">..............................</span>]</p>
+        </div>
+    </div>
+
+    <!-- Javascript code -->
+    <script type="text/javascript">
+        // Stats.js import bookmarklet
+        (function () {
+            var script = document.createElement('script');
+            script.onload = function () {
+                var stats = new Stats();
+                document.body.appendChild(stats.dom);
+                requestAnimationFrame(function loop() {
+                    stats.update();
+                    requestAnimationFrame(loop)
+                });
+            };
+
+            script.src = '//rawgit.com/mrdoob/stats.js/master/build/stats.min.js';
+            document.head.appendChild(script);
+        })()
+
+        // Reference to loading screen and progress bar components
+        const LOADING_SCREEN = document.getElementById("loading-overlay");
+        const LOADING_SPINNER = document.getElementById("loading-spinner");
+        const LOADING_TEXT = document.getElementById("loading-text");
+        const SPINNERS = ["|", "/", "-", "\\", "|", "/", "-", "\\"];
+        var spinCounter = 0;
+
+        // Flags
+        const DEBUG = false;
+        const LOADING_COUNT = 10;
+
+        // Colours
+        const COLOR_WATER = new THREE.Color(0x040e1e);
+        const COLOR_SKY = new THREE.Color(0x031d47);
+        const COLOR_SPOTLIGHT = new THREE.Color(0xfff9e2);
+
+        // Asteroid offets
+        const OFFSET_ASTEROID1 = new THREE.Vector3(0, 5, 0);
+        const OFFSET_MOON = new THREE.Vector3(700, 400, 0);
+        const OFFSET_ASTEROID2 = new THREE.Vector3(400, 400, 400);
+
+        // Scene attributes
+        const LEVEL_WATER = 4.04;
+
+        // Counter for tracking object loading progress
+        var loadCounter = 0;
+        var firstRenderComplete = false;
+
+        // Various objects to be rendered
+        var scene, camera, renderer, controls, terrain, water, car, skybox;
+        var asteroid1, moon1, asteroid2, palmssorted, statue1, statue2, star;
+        var spotLights, dirLightTHREE, ambientLight;
+
+        // Materials
+        var materialWater, materialTerrain, materialCar;
+
+        // References to particle systems
+        var psring = [];
+
+        // Post processing composer
+        var composer;
+
+        // Loaders
+        var objectLoader = new THREE.OBJLoader();
+        var textureLoader = new THREE.TextureLoader();
+
+        // Material library
+        var materialsLibrary = new J.MATERIAL;
+
+        // Cubemap cameras
+        var cubemapCameraCar = new THREE.CubeCamera(1, 5000, 512);
+
+        // Pointer lock stuff
+        var main = document.getElementById('div3D');
+        var instructions = document.getElementById('instructions');
+
+        // Set up a clock
+        var time = new J.TIME(false);
+
+        $(function () {
+            // Start loading bar loop
+            setTimeout(() => {
+                function spin() {
+                    setTimeout(() => {
+                    var spinnerIndex = spinCounter % SPINNERS.length;
+                    LOADING_SPINNER.innerText = SPINNERS[spinnerIndex];
+                    spinCounter++;
+                    if (!firstRenderComplete) spin();
+                    }, 200);
+                }
+
+                spin();
+            }, 0);
+
+            // Create a scene object
+            scene = new THREE.Scene();
+
+            // Load models and their respective materials, properties, positions etc,
+            loadTerrain();
+            loadSatellites();
+            loadCar();
+            loadWater();
+            loadSkybox();
+            loadPalms();
+            loadStatue();
+            loadStar();
+            loadParticles();
+
+            // Setup lights
+            loadLights();
+
+            // Create the default camera and set up appropriate attributes
+            camera = new THREE.PerspectiveCamera(80, window.innerWidth / window.innerHeight, 0.1, 5000);
+            camera.position.set(-35, 10, -18);
+            camera.lookAt(new THREE.Vector3(-34, 10, -18));
+            camera.rotation.order = 'YXZ';
+
+            // Create the default renderer and set up appropriate attributes
+            renderer = new THREE.WebGLRenderer();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setClearColor(COLOR_SKY);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            renderer.shadowMap.bias = 0.001;
+
+            // Calculte device pixel ratio for post processing composer
+            var dpr = 1;
+            if (window.devicePixelRatio !== undefined) {
+                dpr = window.devicePixelRatio;
+            }
+
+            // Create the post process effect composer
+            composer = new THREE.EffectComposer(renderer);
+            composer.setSize(window.innerWidth * dpr, window.innerHeight * dpr);
+            composer.addPass(new THREE.RenderPass(scene, camera));
+
+            // Create and add a bloompass to the pp composer.
+            var bloom = new THREE.UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.65);
+            composer.addPass(bloom);
+
+            // Create and add a film pass to the pp composer
+            var film = new THREE.FilmPass(0.35, 0.025, 0, false);
+            composer.addPass(film);
+
+            // Create and add a fast approximate anti-aliasing pass to the pp composer.
+            var fxaa = new THREE.ShaderPass(THREE.FXAAShader);
+            fxaa.uniforms['resolution'].value.set(1 / (window.innerWidth * dpr), 1 / (window.innerHeight * dpr));
+            composer.addPass(fxaa);
+
+            // Create and add a pixelizer/color indexing pass to the pp composer
+            var pixel = new THREE.ShaderPass(J.RetroPass);
+            pixel.renderToScreen = true;
+            pixel.uniforms['amount'].value = window.innerWidth / 4;
+            pixel.uniforms['resolution'].value.set(window.innerWidth, window.innerHeight);
+            pixel.uniforms['bypass'].value = 1.0;
+            composer.addPass(pixel);
+
+            // Set up the camera controls
+            controls = new J.CAMERA.Godmode(camera);
+            controls.movementDelta = new THREE.Vector3(10, 10, 10);
+            controls.lookDeltaX = 10;
+            controls.lookDeltaY = 5;
+            controls.enabled = false;
+
+            // Pointer lock stuff
+            var havePointerLock = 'pointerLockElement' in document || 'mozPointerLockElement' in document || 'webkitPointerLockElement' in document;
+
+            var clockPauseTime = 0.0;
+
+            if (havePointerLock) {
+                var element = document.body;
+                var pointerlockchange = function (event) {
+                    if (document.pointerLockElement === element || document.mozPointerLockElement === element || document.webkitPointerLockElement === element) {
+                        if (loadCounter < LOADING_COUNT) return;
+                        controls.enabled = true;
+                        instructions.style.display = 'none';
+                        time.paused = false;
+                    } else {
+                        controls.enabled = false;
+                        instructions.style.display = '';
+                        time.paused = true;
+                    }
+                };
+
+                var pointerlockerror = function (event) {
+                    instructions.style.display = '';
+                };
+
+                // Hook pointer lock state change events
+                document.addEventListener('pointerlockchange', pointerlockchange, false);
+                document.addEventListener('mozpointerlockchange', pointerlockchange, false);
+                document.addEventListener('webkitpointerlockchange', pointerlockchange, false);
+                document.addEventListener('pointerlockerror', pointerlockerror, false);
+                document.addEventListener('mozpointerlockerror', pointerlockerror, false);
+                document.addEventListener('webkitpointerlockerror', pointerlockerror, false);
+                instructions.addEventListener('click', function (event) {
+                    if (loadCounter < LOADING_COUNT) return;
+                    instructions.style.display = '';
+                    element.requestPointerLock = element.requestPointerLock || element.mozRequestPointerLock || element.webkitRequestPointerLock;
+                    element.requestPointerLock();
+                }, false);
+            } else {
+                controls.enabled = true;
+                instructions.style.display = 'none';
+                time.paused = false;
+            }
+
+            // Point the renderer to the child element for rendering
+            document.body.appendChild(renderer.domElement);
+
+            // Register to appropriate events.
+            window.addEventListener('resize', onWindowResize, false);
+            window.addEventListener('keydown', onKeyDown, false);
+
+            // Initiate the rendering loop
+            animate();
+        });
+
+        function animate() {
+            // Request an animation frame from the ThreeJS engine
+            requestAnimationFrame(animate);
+
+            // Do not begin rendering anything until all the models are loaded.
+            if (loadCounter < LOADING_COUNT) { return; }
+
+            // Tick the internal clock object
+            time.tick();
+
+            // Capture delta and current time values
+            var d = time.delta;
+            var t = time.time;
+
+            // Update any camera movements
+            controls.update(d);
+
+            // Animate the waves of the body of water
+            water.updateTime(t);
+
+            // Animate dynamic objects
+            animateSatellites(t);
+
+            // Keep skybox centered
+            skybox.position.set(camera.position.x, camera.position.y, camera.position.z);
+
+            // Capture cubemap for car reflections
+            car.visible = false;
+            cubemapCameraCar.update(renderer, scene);
+            if (!firstRenderComplete) {
+                firstRenderComplete = true;
+                console.log("Loading complete")
+                onComponentLoaded();
+            }
+
+            car.visible = true;
+
+            // Render the scene via the post processing composer
+            composer.render(d);
+        }
+
+        function onWindowResize(event) {
+            // Ensure the render pipeline is updated for the new resolution and window size.
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+
+            // Ensure post processing passes are updated for the new resolution and window size.
+            var dpr = 1;
+            if (window.devicePixelRatio !== undefined) {
+                dpr = window.devicePixelRatio;
+            }
+
+            composer.setSize(window.innerWidth * dpr, window.innerHeight * dpr);
+            composer.passes[3].uniforms['resolution'].value.set(1 / (window.innerWidth * dpr), 1 / (window.innerHeight * dpr));
+            composer.passes[1] = new THREE.UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.65);
+            composer.passes[4].uniforms['amount'].value = window.innerWidth / 4;
+            composer.passes[4].uniforms['resolution'].value.set(window.innerWidth, window.innerHeight);
+        }
+
+        function onKeyDown(event) {
+            // Handling of keyboard input
+            switch (event.keyCode) {
+                case 49:
+                    /* NUM 1 */
+                    {
+                        composer.passes[4].uniforms['bypass'].value = (composer.passes[4].uniforms['bypass'].value == 1.0) ? 0.0 : 1.0;
+                        composer.passes[2].uniforms['nIntensity'].value = (composer.passes[2].uniforms['nIntensity'].value == 0.35) ? 0.0 : 0.35;
+                        break;
+                    }
+                default:
+            }
+        }
+
+        // Warning: This function is disgusting. The car model used was made up of 80+ invidivual, unlabeled and unordered meshes.
+        // I had to use this function to identify and then allocate an appropriate material.
+        function getCarMaterial(index) {
+            const carColor = new THREE.Color(0x190156);
+
+            switch (index) {
+                // Glass
+                case 55:
+                    /* GLASS_WINDSHIELD_BACK */
+                    return materialsLibrary.Glass(cubemapCameraCar);
+                case 59:
+                    /* GLASS_WINDOW_RIGHT */
+                    return materialsLibrary.Glass(cubemapCameraCar);
+                case 64:
+                    /* GLASS_WINDOW_LEFT */
+                    return materialsLibrary.Glass(cubemapCameraCar);
+                case 65:
+                    /* GLASS_WINDSHIELD_FRONT */
+                    return materialsLibrary.Glass(cubemapCameraCar);
+
+                // Mirrors
+                case 58:
+                    /* MIRROR_RIGHT */
+                    return materialsLibrary.Default();
+                case 63:
+                    /* MIRROR_LEFT */
+                    return materialsLibrary.Default();
+
+                // Metal
+                case 0:
+                    /* METAL_BODY_BACK */
+                    return materialsLibrary.MetalBody(cubemapCameraCar, carColor);
+                case 1:
+                    /* METALFUEL_CAP */
+                    return materialsLibrary.MetalBody(cubemapCameraCar, carColor);
+                case 23:
+                    /* METAL_BUMPER_BACK */
+                    return materialsLibrary.MetalBody(cubemapCameraCar, carColor);
+                case 24:
+                    /* METAL_BOOT_LID */
+                    return materialsLibrary.MetalBody(cubemapCameraCar, carColor);
+                case 25:
+                    /* METAL_DOOR_LEFT */
+                    return materialsLibrary.MetalBody(cubemapCameraCar, carColor);
+                case 26:
+                    /* METAL_DOOR_RIGHT */
+                    return materialsLibrary.MetalBody(cubemapCameraCar, carColor);
+                case 27:
+                    /* METAL_PANEL_FRONT_RIGHT */
+                    return materialsLibrary.MetalBody(cubemapCameraCar, carColor);
+                case 28:
+                    /* METAL_PANEL_FRONT_LEFT */
+                    return materialsLibrary.MetalBody(cubemapCameraCar, carColor);
+                case 29:
+                    /* METAL_HEADLIGHT_LIDS */
+                    return materialsLibrary.MetalBody(cubemapCameraCar, carColor);
+                case 30:
+                    /* METAL_HOOD */
+                    return materialsLibrary.MetalBody(cubemapCameraCar, carColor);
+                case 31:
+                    /* METAL_BUMPER_FRONT */
+                    return materialsLibrary.MetalBody(cubemapCameraCar, carColor);
+                case 53:
+                    /* SPOILER */
+                    return materialsLibrary.MetalBody(cubemapCameraCar, carColor);
+                case 62:
+                    /* METAL_MIRRORS */
+                    return materialsLibrary.MetalBody(cubemapCameraCar, carColor);
+
+                // Wheels
+                case 3:
+                    /* WHEEL_BACK_LEFT */
+                    return materialsLibrary.Wheel(cubemapCameraCar);
+                case 6:
+                    /* WHEEL_FRONT_RIGHT */
+                    return materialsLibrary.Wheel(cubemapCameraCar);
+                case 9:
+                    /* WHEEL_FRONT_LEFT */
+                    return materialsLibrary.Wheel(cubemapCameraCar);
+                case 12:
+                    /* WHEEL_BACK_RIGHT */
+                    return materialsLibrary.Wheel(cubemapCameraCar);
+
+                // Tyres
+                case 5:
+                    /* TYRE_BACK_LEFT */
+                    return materialsLibrary.Tyre();
+                case 8:
+                    /* TYRE_FRONT_RIGHT */
+                    return materialsLibrary.Tyre();
+                case 11:
+                    /* TYRE_FRONT_LEFT */
+                    return materialsLibrary.Tyre();
+                case 13:
+                    /* TYRE_BACK_LEFT */
+                    return materialsLibrary.Tyre();
+
+                // Indicators
+                case 19:
+                    /* INDICATORS_FRONT */
+                    return new materialsLibrary.LightEmitter(new THREE.Color(0xc15211), new THREE.Color(0xc15211), 0.5);
+
+                // Lights
+                case 45:
+                    /* LIGHT_FRONT_HEADLIGHTS */
+                    return new materialsLibrary.LightEmitter(new THREE.Color(0xffffff), new THREE.Color(0xffffff), 0.5);
+                case 48:
+                    /* LIGHT_FRONT_FOGS */
+                    return new materialsLibrary.LightEmitter(new THREE.Color(0xc15211), new THREE.Color(0xc15211), 0.5);
+                case 67:
+                    /* LIGHT_REAR_HEADLIGHTS */
+                    return new materialsLibrary.LightEmitter(new THREE.Color(0xff82af), new THREE.Color(0xff82af), 0.5);
+
+                // Interior
+                case 2:
+                    /* INTERIOR_REARVIEW */
+                    return materialsLibrary.Default();
+                case 32:
+                    /* INTERIOR_SUN_FLAP */
+                    return materialsLibrary.Default();
+                case 52:
+                    /* INTERIOR_TRUNK_LINER */
+                    return materialsLibrary.Default();
+                case 57:
+                    /* INTERIOR_DOOR_RIGHT */
+                    return materialsLibrary.Default();
+                case 61:
+                    /* INTERIOR_DOOR_LEFT */
+                    return materialsLibrary.Default();
+                case 68:
+                    /* INTERIOR_MAIN */
+                    return materialsLibrary.Default();
+                case 69:
+                    /* INTERIOR_SEAT_RIGHT */
+                    return materialsLibrary.Default();
+                case 70:
+                    /* INTERIOR_SEAT_LEFT */
+                    return materialsLibrary.Default();
+                case 71:
+                    /* INTERIOR_DASH */
+                    return materialsLibrary.Default();
+                case 72:
+                    /* INTERIOR_STEERING_WHEEL */
+                    return materialsLibrary.Default();
+
+                // Chrome
+                case 76:
+                    /* CHROME_EXHAUST_OUTER */
+                    return materialsLibrary.Chrome(cubemapCameraCar);
+                case 77:
+                    /* CHROME_EXHAUST_INNER */
+                    return materialsLibrary.Chrome(cubemapCameraCar);
+
+                // Brake discs
+                case 4:
+                    /* BRAKE_DISC_BACK_LEFT */
+                    return materialsLibrary.Default();
+                case 7:
+                    /* BRAKE_DISC_FRONT_RIGHT */
+                    return materialsLibrary.Default();
+                case 10:
+                    /* BRAKE_DISC_FRONT_LEFT */
+                    return materialsLibrary.Default();
+                case 14:
+                    /* BRAKE_DISC_BACK_RIGHT */
+                    return materialsLibrary.Default();
+
+                // Brake Calipers
+                case 15:
+                    /* BRAKE_CALIPER_BACK_LEFT */
+                    return materialsLibrary.Default();
+                case 16:
+                    /* BRAKE_CALIPER_FRONT_LEFT */
+                    return materialsLibrary.Default();
+                case 17:
+                    /* BRAKE_CALIPER_FRONT_RIGHT */
+                    return materialsLibrary.Default();
+                case 18:
+                    /* BRAKE_CALIPER_BACK_RIGHT */
+                    return materialsLibrary.Default();
+
+                // Misc
+                case 20:
+                    /* MISC_INDICATOR_MOUNT */
+                    return materialsLibrary.MetalBody(cubemapCameraCar, carColor);
+                case 21:
+                    /* MISC_CHASSIS_INNER */
+                    return materialsLibrary.MetalBody(cubemapCameraCar, new THREE.Color(0x444444));
+                case 43:
+                    /* MISC_FRONT_HEADLIGHTS_INNER */
+                    return materialsLibrary.MetalBody(cubemapCameraCar, carColor);
+                case 47:
+                    /* MISC_PLASTIC_LIP_FRONT */
+                    return materialsLibrary.MetalBody(cubemapCameraCar, carColor);
+                case 51:
+                    /* MISC_PLASTIC_LIP_BACK */
+                    return materialsLibrary.MetalBody(cubemapCameraCar, carColor);
+                case 56:
+                    /* MISC_RIGHT_ARCH_FRONT */
+                    return materialsLibrary.Default();
+                case 60:
+                    /* MISC_LEFT_ARCH_FRONT */
+                    return materialsLibrary.Default();
+                case 73:
+                    /* MISC_PEDAL_GAS */
+                    return materialsLibrary.Default();
+                case 74:
+                    /* MISC_PEDAL_BRAKE */
+                    return materialsLibrary.Default();
+                case 75:
+                    /* MISC_PEDAL_CLUTCH */
+                    return materialsLibrary.Default();
+                case 79:
+                    /* MISC_FRONT_GRILL */
+                    return materialsLibrary.GrillFront(cubemapCameraCar);
+            }
+
+            return materialsLibrary.Default();
+        }
+
+        function loadCar() {
+            // Initialise counter for keeping track of the current internal mesh index
+            var count = 0;
+
+            // Attempt to load the car model and apply appropriate materials
+            // Also set up variables for the object
+            objectLoader.load('./models/ZR350.obj', function (object) {
+                object.traverse(function (child) {
+                    if (child instanceof THREE.Mesh) {
+                        child.material = getCarMaterial(count);
+                        child.receiveShadow = true;
+                        child.castShadow = true;
+                        count++;
+                    }
+                });
+                car = object;
+                car.scale.set(0.02, 0.02, 0.02);
+                car.position.set(-20, 6.76, -32);
+                car.rotation.order = 'YXZ';
+                car.rotation.x = 0.09726646259971648;
+                car.rotation.y = 0.5881317007977317;
+                car.rotation.z = 0.04490658503988659;
+                car.castShadow = true;
+                car.receiveShadow = true;
+                cubemapCameraCar.position.copy(car.position);
+                scene.add(car);
+                loadCounter++;
+                onComponentLoaded();
+            }, null, null);
+        }
+
+        function loadTerrain() {
+            // Attempt to load the terrain model and apply the appropriate material
+            // Also set up variables for the object
+            objectLoader.load('./models/terrain.obj', function (object) {
+                object.traverse(function (child) {
+                    if (child instanceof THREE.Mesh) {
+                        terrain = new THREE.Mesh(child.geometry, materialsLibrary.Terrain(LEVEL_WATER, COLOR_WATER));
+                    }
+                });
+                terrain.castShadow = true;
+                terrain.receiveShadow = true;
+                scene.add(terrain);
+                loadCounter++;
+                onComponentLoaded();
+            }, null, null);
+        }
+
+        function loadWater() {
+            // Create a blank plane to act as the water geometry
+            var geometry = new THREE.PlaneBufferGeometry(64, 64, 32, 32);
+
+            // Create a new reflector to act as the water geometry + material, reflections etc.
+            water = new THREE.Reflector(geometry, {
+                clipBias: 0.003,
+                textureWidth: 1024,
+                textureHeight: 1024,
+                color: 0x777777,
+                recursion: 1,
+            });
+
+            // Set up variables
+            water.position.y = LEVEL_WATER;
+            water.rotateX(-90 * (Math.PI / 180));
+            water.setColors(COLOR_SKY, COLOR_WATER);
+            water.renderOrder = -1;
+            scene.add(water);
+            loadCounter++;
+            onComponentLoaded();
+        }
+
+        function loadSkybox() {
+            var tint = new THREE.Color(1, 1, 1);
+
+            // Size, X Divisons, Y Divisions
+            var spheredata = new THREE.Vector3(3000, 32, 32);
+
+            // Create sphere geometry
+            var geometry = new THREE.SphereGeometry(spheredata.x, spheredata.y, spheredata.z);
+
+            // Set up materials and apply. Also set up variables
+            skybox = new THREE.Mesh(geometry, materialsLibrary.Skybox(function (x) {
+                loadCounter++;
+                onComponentLoaded();
+            }));
+            skybox.rotation.set(0, 90, 0);
+            skybox.material.color = tint;
+            skybox.depthWrite = false;
+            skybox.depthTest = false;
+            scene.add(skybox);
+        }
+
+        function loadSatellites() {
+            // Load asteroid model
+            objectLoader.load('./models/asteroid1.obj', function (object) {
+                object.traverse(function (child) {
+                    if (child instanceof THREE.Mesh) {
+                        asteroid1 = new THREE.Mesh(child.geometry, materialsLibrary.Asteroid(1));
+                    }
+                });
+                asteroid1.scale.set(10, 10, 10);
+                asteroid1.position.set(OFFSET_ASTEROID1.x, OFFSET_ASTEROID1.y, OFFSET_ASTEROID1.z);
+                asteroid1.castShadow = true;
+                asteroid1.receiveShadow = true;
+                scene.add(asteroid1);
+                loadCounter++;
+                onComponentLoaded();
+            }, null, null);
+
+            // Load moon model (created from Threejs sphere)
+            var moongeo = new THREE.SphereGeometry(200, 32, 32);
+            moon1 = new THREE.Mesh(moongeo, materialsLibrary.Moon());
+            scene.add(moon1);
+            moon1.position.set(OFFSET_MOON.x, OFFSET_MOON.y, OFFSET_MOON.z);
+            moon1.rotation.z += 20;
+            loadCounter++;
+            onComponentLoaded();
+
+            // Load another asteroid model
+            objectLoader.load('./models/asteroid2.obj', function (object) {
+                object.traverse(function (child) {
+                    if (child instanceof THREE.Mesh) {
+                        asteroid2 = new THREE.Mesh(child.geometry, materialsLibrary.Asteroid(2));
+                    }
+                });
+                asteroid2.scale.set(0.5, 0.5, 0.5);
+                asteroid2.position.set(OFFSET_ASTEROID2.x, OFFSET_ASTEROID2.y, OFFSET_ASTEROID2.z);
+                asteroid2.castShadow = true;
+                asteroid2.receiveShadow = true;
+                scene.add(asteroid2);
+                loadCounter++;
+                onComponentLoaded();
+            }, null, null);
+        }
+
+        // Offset variables for animations
+        var x = 0, y = 0, z = 0;
+
+        function animateSatellites(t) {
+            // This function handles the animation of dynamic objects
+
+            if (time.paused) return;
+
+            t = t / 10;
+
+            var origin = new THREE.Vector3(0, 0, 0);
+
+            // Animate orbiting asteroid
+            var st = Math.sin(t);
+            var ct = Math.cos(t);
+            var p = OFFSET_ASTEROID2;
+
+            var qx = OFFSET_ASTEROID2.x;
+            var qy = origin.x + ct * (p.x - origin.x) - st * (p.y - origin.y);
+            var qz = origin.y + st * (p.x - origin.x) + ct * (p.y - origin.y);
+            asteroid2.position.set(qx, qy, qz);
+
+            // Animate moon rotation
+            moon1.rotation.y += time.delta / 10;
+
+            x += time.delta / 5;
+            z += time.delta / 5;
+            y += time.delta / 5;
+
+            // Animate rings rotation
+            psring[0].rotation.y += time.delta / 5;
+            psring[1].rotation.y += time.delta / 5;
+            psring[1].rotation.z += time.delta / 5;
+            psring[2].rotation.y += time.delta / 5;
+            psring[2].rotation.z -= time.delta / 5;
+        }
+
+        function loadPalms() {
+            // Load palm trees, while also ensuring there is a reference stored for sorting (due to transparency issues)
+            var palms = [];
+            palmssorted = [];
+            var obj;
+            objectLoader.load('./models/palm.obj', function (object) {
+                var c = 0;
+                object.traverse(function (child) {
+                    if (child instanceof THREE.Mesh) {
+                        child.material = materialsLibrary.Palm(c);
+                        child.castShadow = true;
+                        child.receiveShadow = true;
+                        palms.push(child);
+                        c++;
+                    }
+                });
+
+                palms[0].add(palms[6]);
+                palms[1].add(palms[10]);
+                palms[2].add(palms[11]);
+                palms[3].add(palms[7]);
+                palms[4].add(palms[9]);
+                palms[5].add(palms[8]);
+
+                for (var i = 0; i < palms.length / 2; i++) {
+                    palmssorted.push(palms[i]);
+                }
+
+                for (var i = 0; i < palmssorted.length; i++) {
+                    scene.add(palmssorted[i]);
+                }
+
+                // Set palm tree positions
+                palmssorted[0].position.set(-34.00000000000021, 5.799999999999995, 4.899999999999999);
+
+                palmssorted[1].position.set(5.799999999999995, 5.899999999999995, -4.100000000000001);
+
+                palmssorted[2].position.set(-5.095233477823193, 7.39999999999999, 43.98609489998216);
+                palmssorted[2].rotation.set(0, -6.999999999999991, 0);
+
+                palmssorted[3].position.set(52.83366157735707, 4.899999999999999, -11.304612202707764);
+                palmssorted[3].rotation.set(0, 3.5000000000000018, 0);
+
+                palmssorted[4].position.set(22.84949852252329, 6.399999999999993, 19.658856384150553);
+                palmssorted[4].rotation.set(0, 6, 0);
+
+                palmssorted[5].position.set(9.89999999999998, 5.699999999999996, 10.599999999999978);
+
+                loadCounter++;
+                onComponentLoaded();
+            }, null, null);
+        }
+
+        function loadStatue() {
+            // Load the column model and apply variables
+            objectLoader.load('./models/column.obj', function (object) {
+                object.traverse(function (child) {
+                    if (child instanceof THREE.Mesh) {
+                        child.material = materialsLibrary.Statue();
+                        child.castShadow = true;
+                        child.receiveShadow = true;
+                    }
+                });
+                statue1 = object;
+                statue1.scale.set(0.3, 0.3, 0.3);
+                statue1.position.set(-13.403505578671922, 6.0808830406263, -41.919474736490955);
+                statue1.rotation.set(0.05, 0, -0.05);
+                scene.add(statue1);
+
+                statue2 = statue1.clone();
+                statue2.position.set(-31.914943767793197, 5.978452471678534, -29.377799972424192);
+                statue2.rotation.set(0.15000000000000002, 0, -0.05);
+                scene.add(statue2);
+
+                loadCounter++;
+                onComponentLoaded();
+            }, null, null);
+        }
+
+        function loadStar() {
+            // Load the 'star' geometry (just a sphere with a material)
+            var geometry = new THREE.SphereGeometry(300, 64, 64);
+            star = new THREE.Mesh(geometry, materialsLibrary.Star());
+            star.position.set(540, 450, 900);
+            scene.add(star);
+            loadCounter++;
+            onComponentLoaded();
+        }
+
+        function loadParticles() {
+            // Load the three particle systems.
+            var pcount = 500;
+
+            // Set up three float buffers
+            var positions = new Float32Array(pcount * 3);
+            var colors = new Float32Array(pcount * 3);
+            var sizes = new Float32Array(pcount);
+
+            var vertex;
+            var color = new THREE.Color();
+
+            var pos = new THREE.Vector3(200, 0, 200);
+            var origin = new THREE.Vector3(0, 0, 0);
+
+            const D2R = 0.0174533;
+
+            // calculate color, location and size for each particle
+            for (var i = 0; i <= pcount; i++) {
+                var r = 360 * (i / pcount);
+
+                var st = Math.sin(r * D2R);
+                var ct = Math.cos(r * D2R);
+                var p = pos.clone();
+
+                p.x = p.x + (Math.random() * 20);
+                p.z = p.z + (Math.random() * 20);
+
+                var pX = origin.x + ct * (p.x - origin.x) - st * (p.y - origin.y);
+                var pY = p.y + Math.random() * 20 + 0;
+                var pZ = origin.y + st * (p.x - origin.x) + ct * (p.y - origin.y);
+
+                vertex = new THREE.Vector3(pX, pY, pZ);
+
+                vertex.toArray(positions, i * 3);
+
+                color.setHSL(r / 360, 1.0, 0.82);
+                color.toArray(colors, i * 3);
+                sizes[i] = 20;
+            }
+
+            // Create OpenGL Buffers
+            var geometry = new THREE.BufferGeometry();
+            geometry.addAttribute('position', new THREE.BufferAttribute(positions, 3));
+            geometry.addAttribute('customColor', new THREE.BufferAttribute(colors, 3));
+            geometry.addAttribute('size', new THREE.BufferAttribute(sizes, 1));
+
+            var material = new THREE.ShaderMaterial({
+                uniforms: {
+                    color: {
+                        value: new THREE.Color(0xffffff)
+                    },
+                    texture: {
+                        value: textureLoader.load('./textures/texture_particle_circle.png')
+                    }
+                },
+                vertexShader: shader_particle_basic.vert,
+                fragmentShader: shader_particle_basic.frag,
+                alphaTest: 0.5
+            });
+
+            // Set up renderable particle systems and their variables
+            psring.push(new THREE.Points(geometry, material));
+            psring[0].rotation.order = 'XZY';
+            psring.push(psring[0].clone());
+            psring.push(psring[0].clone());
+            psring[2].rotation.y = THREE.Math.degToRad(90);
+
+            psring[0].rotation.order = 'XZY';
+            psring[1].rotation.order = 'XZY';
+            psring[2].rotation.order = 'XZY';
+
+            psring.forEach(function (x) {
+                scene.add(x)
+            });
+        }
+
+        function loadLights() {
+            // Set up a directional light.
+            dirLightTHREE = new THREE.DirectionalLight(new THREE.Color(0xffb7d1), 0.7);
+            dirLightTHREE.position.set(600, 500, 1000);
+            dirLightTHREE.target.position.set(0, 0, 0);
+            dirLightTHREE.target.updateMatrixWorld();
+            dirLightTHREE.castShadow = true;
+            dirLightTHREE.shadow = new THREE.LightShadow(new THREE.OrthographicCamera(128 / -2, 128 / 2, 128 / 2, 128 / -2, 30, 2000));
+            dirLightTHREE.shadow.mapSize.width = 1024;
+            dirLightTHREE.shadow.mapSize.height = 1024;
+
+            // Set up  an ambient light
+            ambientLight = new THREE.AmbientLight(0xff7fad);
+            ambientLight.intensity = 0.1;
+
+            // Set up car spotlights
+            spotLights = {
+                carLHeadLamp: new THREE.SpotLight(COLOR_SPOTLIGHT, 1),
+                carRHeadLamp: new THREE.SpotLight(COLOR_SPOTLIGHT, 1)
+            };
+
+            const DIRECTION_CAR_SPOTLIGHT = new THREE.Vector3(0.5521852233407482, -0.0971131659461335, 0.8280462016844513);
+            var targetpos;
+
+            spotLights["carLHeadLamp"].position.set(-16.599999999999966, 6.799999999999992, -29.30000000000016);
+            spotLights["carLHeadLamp"].penumbra = 0.6;
+            spotLights["carLHeadLamp"].angle = 0.4;
+            spotLights["carLHeadLamp"].decay = 2;
+            spotLights["carLHeadLamp"].distance = 150;
+            targetpos = spotLights["carLHeadLamp"].position.clone().add(DIRECTION_CAR_SPOTLIGHT);
+            spotLights["carLHeadLamp"].target.position.set(targetpos.x, targetpos.y, targetpos.z);
+            spotLights["carLHeadLamp"].target.updateMatrixWorld();
+            spotLights["carLHeadLamp"].castShadow = true;
+            spotLights["carLHeadLamp"].shadow = new THREE.LightShadow(new THREE.PerspectiveCamera(45, 1, 1, 150));
+            spotLights["carLHeadLamp"].shadow.mapSize.width = 1024;
+            spotLights["carLHeadLamp"].shadow.mapSize.height = 1024;
+
+            spotLights["carRHeadLamp"].position.set(-19, 6.699999999999992, -27.700000000000138);
+            spotLights["carRHeadLamp"].penumbra = 0.6;
+            spotLights["carRHeadLamp"].angle = 0.4;
+            spotLights["carRHeadLamp"].decay = 2;
+            spotLights["carRHeadLamp"].distance = 150;
+            targetpos = spotLights["carRHeadLamp"].position.clone().add(DIRECTION_CAR_SPOTLIGHT);
+            spotLights["carRHeadLamp"].target.position.set(targetpos.x, targetpos.y, targetpos.z);
+            spotLights["carRHeadLamp"].target.updateMatrixWorld();
+            spotLights["carRHeadLamp"].castShadow = true;
+            spotLights["carRHeadLamp"].shadow = new THREE.LightShadow(new THREE.PerspectiveCamera(45, 1, 1, 150));
+            spotLights["carRHeadLamp"].shadow.mapSize.width = 1024;
+            spotLights["carRHeadLamp"].shadow.mapSize.height = 1024;
+
+            // Add lights to scene
+            scene.add(dirLightTHREE);
+            scene.add(ambientLight);
+            for (var sl in spotLights) scene.add(spotLights[sl]);
+        }
+
+        function onComponentLoaded() {
+            if (loadCounter == LOADING_COUNT && firstRenderComplete) {
+                setTimeout(() => {
+                    LOADING_SCREEN.classList.add("hide-overlay");
+                }, 500);
+            }
+
+            LOADING_TEXT.innerText = "#".repeat(loadCounter * 3) + ".".repeat((LOADING_COUNT - loadCounter) * 3);
+        }
+    </script>
+</body>
+
+</html>
