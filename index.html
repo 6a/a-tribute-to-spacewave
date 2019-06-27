@@ -48,17 +48,19 @@
 
 <body>
     <div id="div3D">
-        <div class="noselect" id="instructions">
-            <p>Left click to interact</p>
-            <p>w, s, a, d = move, q = down, e = up, mouse = look around</p>
-            <p>Press 1 to toggle the pixelizer + colour indexer post-processing pass</p>
+        <div class="noselect jpfont" id="instructions">
+            <p>操作するには左クリック</p>
+            <p>w, s, a, d = 移動</p>
+            <p>q, e = 昇降</p>
+            <p>マウス = カメラ操作</p>
+            <p>1 キー = ピクセルフィルターの切り替え</p>
         </div>
     </div>
 
     <div id="loading-overlay" class="noselect">
         <div class="loading-box">
-            <p>A Tribute to SPACEWAVE</p>
-            <p>LOADING - PLEASE WAIT <span id="loading-spinner">\</span> [<span id="loading-text">..............................</span>]</p>
+            <p>A Tribute to Spacewave</p>
+            <p class="jpfont">読み込み中・少々お待ちください <span class="enfont" id="loading-spinner">\</span> [<span class="enfont" id="loading-text">..............................</span>]</p>
         </div>
     </div>
 
@@ -141,16 +143,15 @@
 
         $(function () {
             // Start loading bar loop
-            setTimeout(() => {
+            setTimeout(function() {
                 function spin() {
-                    setTimeout(() => {
+                    setTimeout(function() {
                     var spinnerIndex = spinCounter % SPINNERS.length;
                     LOADING_SPINNER.innerText = SPINNERS[spinnerIndex];
                     spinCounter++;
                     if (!firstRenderComplete) spin();
                     }, 200);
                 }
-
                 spin();
             }, 0);
 
@@ -966,14 +967,23 @@
             for (var sl in spotLights) scene.add(spotLights[sl]);
         }
 
+        function makeRepeat(char, len) {
+            var out = ""
+            for (var index = 0; index < len; index++) {
+                out += char
+            }
+
+            return out
+        }
+
         function onComponentLoaded() {
             if (loadCounter == LOADING_COUNT && firstRenderComplete) {
-                setTimeout(() => {
+                setTimeout(function() {
                     LOADING_SCREEN.classList.add("hide-overlay");
                 }, 500);
             }
 
-            LOADING_TEXT.innerText = "#".repeat(loadCounter * 3) + ".".repeat((LOADING_COUNT - loadCounter) * 3);
+            LOADING_TEXT.innerText = makeRepeat("#", loadCounter * 3) + makeRepeat(".", (LOADING_COUNT - loadCounter) * 3);
         }
     </script>
 </body>
